@@ -1,11 +1,13 @@
 import json
 import os
 import requests
+
 import re
 import textwrap
 import time
 import urllib3
 
+from requests.auth import HTTPBasicAuth
 from dotenv import load_dotenv
 
 # Disable unverified HTTPS request warnings, to avoid spamming stdout.
@@ -29,7 +31,6 @@ prefix_info = "[INFO] "
 prefix_fail = "[FAIL] "
 
 def main():
-
     print("\n--- Starting Tests ---\n")
 
     load_dotenv()
@@ -52,11 +53,11 @@ def main():
         check_grafana_version(grafana_api_key)
 
         # Check prometheus datasource is connected properly. Return datasource ID for future queries.
-        datasource_id = fetch_prometheus_datasource_grafana(grafana_api_key)
+        datasource_id = fetch_prometheus_datasource_from_grafana(grafana_api_key)
 
         # Check cAdvisor and prometheus data proxied from Grafana.
-        check_grafana_proxied_data(grafana_api_key, datasource_id=datasource_id)
-        check_cadvisor_data_grafana(grafana_api_key, datasource_id=datasource_id)
+        check_proxied_cadvisor_version(grafana_api_key, datasource_id=datasource_id)
+        check_proxied_container_data(grafana_api_key, datasource_id=datasource_id)
     except AssertionError as e:
         print("[FAIL] Failed to complete tests. Error: \n")
         print(e)
@@ -82,14 +83,32 @@ def make_api_get_request(api, path, api_key="", scheme="https://"):
         return requests.get(uri, verify=False)
 
 def generate_grafana_api_keys(username="admin", password="admin"):
+    
     # load from environment if applicable - saves re-registering api keys in dev.
-    if os.environ["GF_API_KEY"]: 
+    if "GF_API_KEY" in os.environ:
         print(prefix_info + "Loaded Grafana API key from environment.")
         return os.environ["GF_API_KEY"]
 
     path = "/api/auth/keys"
-    response = requests.post(apis.get("grafana") + path, auth=HTTPBasicAuth(username, password), verify=False)
-    data = json.loads(response.text).get("data")
+    scheme = "https://"
+
+    headers = {
+        'Content-Type': 'application/json'
+    }
+
+    data = {
+        "name": f"ci_key{int(time.time())}",
+        "role": "Admin"
+    }
+
+    response = requests.post(scheme + apis.get("grafana") + path, 
+        auth=HTTPBasicAuth(username, password),
+        json=data,
+        headers=headers,
+        verify=False
+    )
+
+    data = json.loads(response.text)
     if "key" in data:
         print("Registered API key for Grafana")
         return data.get("key")
@@ -175,7 +194,7 @@ def check_grafana_version(grafana_api_key):
         else:
             print(prefix_ok + "Got Grafana Version %s" % data.get("buildInfo").get("version"))
 
-def fetch_prometheus_datasource_grafana(grafana_api_key):
+def fetch_prometheus_datasource_from_grafana(grafana_api_key):
     # Load a list of datasources from Grafana.
     path = "/api/datasources"
     response = make_api_get_request("grafana", path, api_key=grafana_api_key)
@@ -211,11 +230,12 @@ def fetch_prometheus_datasource_grafana(grafana_api_key):
     else:
         print(prefix_ok + "Prometheus datasource has correct URL.")
 
+    print(prefix_info + "Using Prometheus Datasource %d" % (data[0].get('id')))
     # Grafana datasource ID's are unique, we expect them to change.
     # Store this data to use it later.
     return data[0].get('id')
 
-def check_grafana_proxied_data(grafana_api_key, datasource_id):
+def check_proxied_cadvisor_version(grafana_api_key, datasource_id):
 
     # Query Prometheus datasource indirectly through Grafana.
     path = f'/api/datasources/proxy/{datasource_id}/api/v1/query'
@@ -259,7 +279,7 @@ def check_grafana_proxied_data(grafana_api_key, datasource_id):
     else:
         print(prefix_ok + "Fetch cAdvisor version data %s from Grafana." % (metric.get("cadvisorVersion")))
 
-def check_cadvisor_data_grafana(grafana_api_key, datasource_id):
+def check_proxied_container_data(grafana_api_key, datasource_id):
     # Query a list of metrics.
     # We should be expecting cAdvisor metrics to be returned.
     path = f'/api/datasources/proxy/{datasource_id}/api/v1/label/__name__/values'
