@@ -2,6 +2,7 @@ import json
 import os
 import requests
 import re
+import textwrap
 import time
 import urllib3
 
@@ -23,7 +24,14 @@ prometheus_internal_url = 'http://prometheus:9090'
 # Used to compare against a list of available metrics in Grafana.
 metric_queries = ['container_cpu_load_average_10s', 'container_last_seen', 'prometheus_http_requests_total']
 
+prefix_ok = "[OK] "
+prefix_info = "[INFO] "
+prefix_fail = "[FAIL] "
+
 def main():
+
+    print("\n--- Starting Tests ---\n")
+
     load_dotenv()
 
     grafana_username = "admin"
@@ -34,20 +42,31 @@ def main():
     if "GF_SECURITY_ADMIN_PASSWORD" in os.environ:
         grafana_password = os.environ["GF_SECURITY_ADMIN_PASSWORD"]
 
-    check_cadvisor_api_version()
-    check_prometheus_version()
+    try:
+        check_cadvisor_api_version()
+        check_prometheus_version()
 
-    # Future checks may require an API key - generate one or load it from env.
-    grafana_api_key = generate_grafana_api_keys(username=grafana_username, password=grafana_password)
+        # Future checks may require an API key - generate one or load it from env.
+        grafana_api_key = generate_grafana_api_keys(username=grafana_username, password=grafana_password)
 
-    check_grafana_version(grafana_api_key)
+        check_grafana_version(grafana_api_key)
 
-    # Check prometheus datasource is connected properly. Return datasource ID for future queries.
-    datasource_id = fetch_prometheus_datasource_grafana(grafana_api_key)
+        # Check prometheus datasource is connected properly. Return datasource ID for future queries.
+        datasource_id = fetch_prometheus_datasource_grafana(grafana_api_key)
 
-    # Check cAdvisor and prometheus data proxied from Grafana.
-    check_grafana_proxied_data(grafana_api_key, datasource_id=datasource_id)
-    check_cadvisor_data_grafana(grafana_api_key, datasource_id=datasource_id)
+        # Check cAdvisor and prometheus data proxied from Grafana.
+        check_grafana_proxied_data(grafana_api_key, datasource_id=datasource_id)
+        check_cadvisor_data_grafana(grafana_api_key, datasource_id=datasource_id)
+    except AssertionError as e:
+        print("[FAIL] Failed to complete tests. Error: \n")
+        print(e)
+        pass
+    except Exception as e:
+        print("[FAIL] Unhandled failure in testing. Error: \n")
+        print(e)
+
+
+    print("\n--- done ---")
 
 def make_api_get_request(api, path, api_key="", scheme="https://"):
     uri = scheme + apis.get(api) + path
@@ -65,7 +84,7 @@ def make_api_get_request(api, path, api_key="", scheme="https://"):
 def generate_grafana_api_keys(username="admin", password="admin"):
     # load from environment if applicable - saves re-registering api keys in dev.
     if os.environ["GF_API_KEY"]: 
-        print("Loaded Grafana API key from environment.")
+        print(prefix_info + "Loaded Grafana API key from environment.")
         return os.environ["GF_API_KEY"]
 
     path = "/api/auth/keys"
@@ -85,18 +104,18 @@ def check_cadvisor_api_version():
     content_type = response.headers.get('Content-Type')
 
     if (response.status_code != 200):
-        raise AssertionError("""
-            Incorrect status code from cAdvisor direct checks.\n
-            Expected 200, got %d.\n
-        """ % (response.status_code))
+        raise AssertionError(textwrap.dedent(f"""\
+            Incorrect status code from cAdvisor direct checks.
+            Expected 200, got {response.status_code}.
+        """))
 
     if "application/json" not in content_type:
-        raise AssertionError("""
-            Received incorrect content from cAdvisor API.\n
-            Expected JSON, got %s.\n
-        """ % (content_type)) 
+        raise AssertionError(textwrap.dedent(f"""\
+            Received incorrect content from cAdvisor API.
+            Expected JSON, got {content_type}.
+        """))
     else:
-        print("Got cAdvisor instance.")
+        print(prefix_ok + "Got cAdvisor instance.")
 
 def check_prometheus_version():
     path = "/api/v1/status/buildinfo"
@@ -106,25 +125,25 @@ def check_prometheus_version():
     content_type = response.headers.get('Content-Type')
 
     if (response.status_code != 200):
-        raise AssertionError("""
-            Incorrect status code from Prometheus direct check.\n
-            Expected 200, got %d.\n
-        """ % (response.status_code))
+        raise AssertionError(textwrap.dedent(f"""\
+            Incorrect status code from Prometheus direct check.
+            Expected 200, got {response.status_code}.
+        """))
 
     if "application/json" not in content_type:
-        raise AssertionError("""
-            Received incorrect content from Prometheus API.\n
-            Expected JSON, got %s.\n
-        """ % (content_type)) 
+        raise AssertionError(textwrap.dedent(f"""\
+            Received incorrect content from Prometheus API.
+            Expected JSON, got {content_type}.
+        """))
 
     data = json.loads(response.text).get("data")
     if "version" not in data:
-        raise AssertionError("""
+        raise AssertionError(textwrap.dedent(f"""\
             Expected to find Prometheus version number. 
-            Got %s
-        """ % (data)) 
+            Got {data}
+        """))
     else:
-        print("Got Prometheus Version %s" % data.get("version"))
+        print(prefix_ok + "Got Prometheus Version %s" % data.get("version"))
 
 def check_grafana_version(grafana_api_key):
     # Load a general list of build information about Grafana.
@@ -154,7 +173,7 @@ def check_grafana_version(grafana_api_key):
                 Got %s
             """ % (data)) 
         else:
-            print("Got Grafana Version %s" % data.get("buildInfo").get("version"))
+            print(prefix_ok + "Got Grafana Version %s" % data.get("buildInfo").get("version"))
 
 def fetch_prometheus_datasource_grafana(grafana_api_key):
     # Load a list of datasources from Grafana.
@@ -180,7 +199,7 @@ def fetch_prometheus_datasource_grafana(grafana_api_key):
             Expected Prometheus, got %s.\n
         """ % (data[0].get('name')))
     else:
-        print("Prometheus datasource has correct name.")
+        print(prefix_ok + "Prometheus datasource has correct name.")
 
     # Check the datasource URL is correct
     # Note that this is _not_ publicweb traffic, so we expect docker internal URLs.
@@ -190,7 +209,7 @@ def fetch_prometheus_datasource_grafana(grafana_api_key):
             Expected %s, got %s.\n
         """ % (prometheus_internal_url, data[0].get('url'))) 
     else:
-        print("Prometheus datasource has correct URL.")
+        print(prefix_ok + "Prometheus datasource has correct URL.")
 
     # Grafana datasource ID's are unique, we expect them to change.
     # Store this data to use it later.
@@ -238,7 +257,7 @@ def check_grafana_proxied_data(grafana_api_key, datasource_id):
             Got %d.\n
         """ % (metric.get("cadvisorVersion"))) 
     else:
-        print("Fetch cAdvisor version data %s from Grafana." % (metric.get("cadvisorVersion")))
+        print(prefix_ok + "Fetch cAdvisor version data %s from Grafana." % (metric.get("cadvisorVersion")))
 
 def check_cadvisor_data_grafana(grafana_api_key, datasource_id):
     # Query a list of metrics.
@@ -249,19 +268,21 @@ def check_cadvisor_data_grafana(grafana_api_key, datasource_id):
     data = json.loads(response.text).get("data")
 
     if (response.status_code != 200):
-        raise AssertionError("""
-            Incorrect status code from Grafana proxied data source values.\n
-            Expected 200, got %d.\n
-        """ % (response.status_code))
+        raise AssertionError(textwrap.dedent(f"""\
+            Incorrect status code from Grafana proxied data source values.
+            Expected 200, got {response.status_code}.
+        """))
+    else:
+        print(prefix_ok + "Correct status code from Grafana.")
 
     # Check a few common cAdvisor prometheus metrics.
     for query in metric_queries:
         if query not in data:
-            raise AssertionError("""
-                Failed to find metric from Grafana.\n
-                Expected %s.\n
-            """ % (query))
+            raise AssertionError(textwrap.dedent(f"""\
+                Failed to find metric from Grafana.
+                Expected {query}.
+            """))
         else: 
-            print("Metric %s exists in Grafana." % (query))
+            print(prefix_ok + "Metric %s exists in Grafana." % (query))
 
 main()
