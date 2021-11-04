@@ -17,36 +17,39 @@ apis = {
     "prometheus": "prometheus." + domain,
 }
 
+# Used to validate prometheus datasource settings.
 prometheus_internal_url = 'http://prometheus:9090'
+
+# Used to compare against a list of available metrics in Grafana.
 metric_queries = ['container_cpu_load_average_10s', 'container_last_seen', 'prometheus_http_requests_total']
 
 def main():
-    # Initialise environment
     load_dotenv()
 
-    # Load username and password if they're set in environment.
-    grafana_username = os.environ["GF_SECURITY_ADMIN_USER"] or "admin"
-    grafana_password = os.environ["GF_SECURITY_ADMIN_PASSWORD"] or "admin"
+    grafana_username = "admin"
+    if "GF_SECURITY_ADMIN_USER" in os.environ:
+        grafana_username = os.environ["GF_SECURITY_ADMIN_USER"]
+    
+    grafana_password = "admin"
+    if "GF_SECURITY_ADMIN_PASSWORD" in os.environ:
+        grafana_password = os.environ["GF_SECURITY_ADMIN_PASSWORD"]
 
-    # Basic checks
     check_cadvisor_api_version()
     check_prometheus_version()
 
     # Future checks may require an API key - generate one or load it from env.
     grafana_api_key = generate_grafana_api_keys(username=grafana_username, password=grafana_password)
 
-    # Basic Grafana check
     check_grafana_version(grafana_api_key)
 
     # Check prometheus datasource is connected properly. Return datasource ID for future queries.
     datasource_id = fetch_prometheus_datasource_grafana(grafana_api_key)
 
     # Check cAdvisor and prometheus data proxied from Grafana.
-    # See https://grafana.com/docs/grafana/latest/http_api/data_source/#data-source-proxy-calls
     check_grafana_proxied_data(grafana_api_key, datasource_id=datasource_id)
     check_cadvisor_data_grafana(grafana_api_key, datasource_id=datasource_id)
 
-def make_api_get_request(api, path, api_key="", scheme="https"):
+def make_api_get_request(api, path, api_key="", scheme="https://"):
     uri = scheme + apis.get(api) + path
 
     # If we're using self-signed certs, verify SSL/TLS needs to be disabled.
@@ -59,14 +62,14 @@ def make_api_get_request(api, path, api_key="", scheme="https"):
     else:
         return requests.get(uri, verify=False)
 
-def generate_grafana_api_keys():
+def generate_grafana_api_keys(username="admin", password="admin"):
     # load from environment if applicable - saves re-registering api keys in dev.
     if os.environ["GF_API_KEY"]: 
         print("Loaded Grafana API key from environment.")
         return os.environ["GF_API_KEY"]
 
     path = "/api/auth/keys"
-    response = requests.post(apis.get("grafana") + path, auth=HTTPBasicAuth('admin', 'admin'), verify=False)
+    response = requests.post(apis.get("grafana") + path, auth=HTTPBasicAuth(username, password), verify=False)
     data = json.loads(response.text).get("data")
     if "key" in data:
         print("Registered API key for Grafana")
