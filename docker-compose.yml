@@ -1,12 +1,14 @@
 version: '3.9'
 
 volumes:
-  grafana: {}
+  grafana_data: {}
+  prometheus_data: {}
 
 networks:
   backbone: 
     driver: bridge
 
+# N.B. Prod services shouldn't be using latest.
 services:
   cadvisor:
     image: 'google/cadvisor:latest'
@@ -16,7 +18,7 @@ services:
       - /:/rootfs:ro
       - /var/run:/var/run:ro
       - /sys:/sys:ro
-      - /var/lib/docker/:/var/lib/docker:ro
+      - /var/run/docker.sock:/var/run/docker.sock:rw
       - /dev/disk:/dev/disk/:ro
     networks:
       - backbone
@@ -24,16 +26,23 @@ services:
       - '8080'
 
   grafana:
-    image: grafana/grafana:5.1.0
+    image: grafana/grafana:latest
     container_name: grafana
+    restart: unless-stopped
+    volumes:
+      - ./grafana/:/etc/grafana/provisioning/
+      - grafana_data:/var/lib/grafana
     networks:
       - backbone
     expose:
       - '3000'
+    depends_on:
+      - prometheus
 
   nginx: 
     image: nginx:latest
     container_name: nginx
+    restart: unless-stopped
     volumes:
       - ./nginx.conf:/etc/nginx/nginx.conf:ro
       - ./ssl.conf:/etc/nginx/includes/ssl.conf:ro
@@ -42,6 +51,8 @@ services:
       - backbone
     ports:
       - 443:443
+    depends_on:
+      - grafana
 
   prometheus:
     image: 'prom/prometheus:latest'
@@ -49,9 +60,12 @@ services:
     restart: unless-stopped
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
     networks:
       - backbone
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
     expose:
       - '9090'
+    depends_on:
+      - cadvisor
