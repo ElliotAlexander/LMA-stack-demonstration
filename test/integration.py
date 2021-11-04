@@ -1,14 +1,21 @@
 import json
+import logging
 import os
 import requests
 
 import re
 import textwrap
 import time
+import traceback
 import urllib3
+
 
 from requests.auth import HTTPBasicAuth
 from dotenv import load_dotenv
+
+logging.basicConfig()
+logging.getLogger("test").setLevel(logging.INFO)
+log = logging.getLogger("test")
 
 # Disable unverified HTTPS request warnings, to avoid spamming stdout.
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -26,12 +33,8 @@ prometheus_internal_url = 'http://prometheus:9090'
 # Used to compare against a list of available metrics in Grafana.
 metric_queries = ['container_cpu_load_average_10s', 'container_last_seen', 'prometheus_http_requests_total']
 
-prefix_ok = "[OK] "
-prefix_info = "[INFO] "
-prefix_fail = "[FAIL] "
-
 def main():
-    print("\n--- Starting Tests ---\n")
+    log.info("Starting tests.")
 
     load_dotenv()
 
@@ -59,15 +62,11 @@ def main():
         check_proxied_cadvisor_version(grafana_api_key, datasource_id=datasource_id)
         check_proxied_container_data(grafana_api_key, datasource_id=datasource_id)
     except AssertionError as e:
-        print("[FAIL] Failed to complete tests. Error: \n")
-        print(e)
-        pass
+        log.exception("Failed to complete tests.")
     except Exception as e:
-        print("[FAIL] Unhandled failure in testing. Error: \n")
-        print(e)
+        log.exception("Unhandled failure in testing.")
 
-
-    print("\n--- done ---")
+    log.info("Done!")
 
 def make_api_get_request(api, path, api_key="", scheme="https://"):
     uri = scheme + apis.get(api) + path
@@ -83,10 +82,10 @@ def make_api_get_request(api, path, api_key="", scheme="https://"):
         return requests.get(uri, verify=False)
 
 def generate_grafana_api_keys(username="admin", password="admin"):
-    
+
     # load from environment if applicable - saves re-registering api keys in dev.
     if "GF_API_KEY" in os.environ:
-        print(prefix_info + "Loaded Grafana API key from environment.")
+        log.info("Loaded Grafana API key from environment.")
         return os.environ["GF_API_KEY"]
 
     path = "/api/auth/keys"
@@ -110,11 +109,10 @@ def generate_grafana_api_keys(username="admin", password="admin"):
 
     data = json.loads(response.text)
     if "key" in data:
-        print("Registered API key for Grafana")
+        log.info("Registered API key for Grafana")
         return data.get("key")
     else:
-        print("Warning - failed to register API key for Grafana.")
-        return "Test"
+        log.warn("Failed to register API key for Grafana.")
 
 def check_cadvisor_api_version():
     # A status overview of cAdvisors data.
@@ -134,7 +132,7 @@ def check_cadvisor_api_version():
             Expected JSON, got {content_type}.
         """))
     else:
-        print(prefix_ok + "Got cAdvisor instance.")
+        log.info("Got cAdvisor instance.")
 
 def check_prometheus_version():
     path = "/api/v1/status/buildinfo"
@@ -162,7 +160,7 @@ def check_prometheus_version():
             Got {data}
         """))
     else:
-        print(prefix_ok + "Got Prometheus Version %s" % data.get("version"))
+        log.info("Got Prometheus Version %s" % data.get("version"))
 
 def check_grafana_version(grafana_api_key):
     # Load a general list of build information about Grafana.
@@ -192,7 +190,7 @@ def check_grafana_version(grafana_api_key):
                 Got %s
             """ % (data)) 
         else:
-            print(prefix_ok + "Got Grafana Version %s" % data.get("buildInfo").get("version"))
+            log.info("Got Grafana Version %s" % data.get("buildInfo").get("version"))
 
 def fetch_prometheus_datasource_from_grafana(grafana_api_key):
     # Load a list of datasources from Grafana.
@@ -218,7 +216,7 @@ def fetch_prometheus_datasource_from_grafana(grafana_api_key):
             Expected Prometheus, got %s.\n
         """ % (data[0].get('name')))
     else:
-        print(prefix_ok + "Prometheus datasource has correct name.")
+        log.info("Prometheus datasource has correct name.")
 
     # Check the datasource URL is correct
     # Note that this is _not_ publicweb traffic, so we expect docker internal URLs.
@@ -228,9 +226,9 @@ def fetch_prometheus_datasource_from_grafana(grafana_api_key):
             Expected %s, got %s.\n
         """ % (prometheus_internal_url, data[0].get('url'))) 
     else:
-        print(prefix_ok + "Prometheus datasource has correct URL.")
+        log.info("Prometheus datasource has correct URL.")
 
-    print(prefix_info + "Using Prometheus Datasource %d" % (data[0].get('id')))
+    log.info("Using Prometheus datasource ID: %d" % (data[0].get('id')))
     # Grafana datasource ID's are unique, we expect them to change.
     # Store this data to use it later.
     return data[0].get('id')
@@ -277,7 +275,7 @@ def check_proxied_cadvisor_version(grafana_api_key, datasource_id):
             Got %d.\n
         """ % (metric.get("cadvisorVersion"))) 
     else:
-        print(prefix_ok + "Fetch cAdvisor version data %s from Grafana." % (metric.get("cadvisorVersion")))
+        log.info("Fetch cAdvisor version data %s from Grafana." % (metric.get("cadvisorVersion")))
 
 def check_proxied_container_data(grafana_api_key, datasource_id):
     # Query a list of metrics.
@@ -293,7 +291,7 @@ def check_proxied_container_data(grafana_api_key, datasource_id):
             Expected 200, got {response.status_code}.
         """))
     else:
-        print(prefix_ok + "Correct status code from Grafana.")
+        log.info("Correct status code from Grafana.")
 
     # Check a few common cAdvisor prometheus metrics.
     for query in metric_queries:
@@ -303,6 +301,6 @@ def check_proxied_container_data(grafana_api_key, datasource_id):
                 Expected {query}.
             """))
         else: 
-            print(prefix_ok + "Metric %s exists in Grafana." % (query))
+            log.info("Metric %s exists in Grafana." % (query))
 
 main()
